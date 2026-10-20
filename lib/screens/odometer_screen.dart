@@ -77,7 +77,8 @@ class _OdometerScreenState extends State<OdometerScreen> {
     _enterOdometerMode();
   }
 
-  Widget _buildMapPanel() {
+
+Widget _buildMapPanel() {
   final position = _currentPosition;
 
   final currentPoint = position == null
@@ -85,7 +86,7 @@ class _OdometerScreenState extends State<OdometerScreen> {
       : LatLng(position.latitude, position.longitude);
 
   return ClipRRect(
-    borderRadius: BorderRadius.circular(14),
+    borderRadius: BorderRadius.circular(12),
     child: Stack(
       children: [
         Positioned.fill(
@@ -96,7 +97,6 @@ class _OdometerScreenState extends State<OdometerScreen> {
               initialZoom: position == null ? 5 : 16,
               onMapReady: () {
                 _mapReady = true;
-
                 final latestPosition = _currentPosition;
 
                 if (latestPosition != null) {
@@ -108,10 +108,8 @@ class _OdometerScreenState extends State<OdometerScreen> {
               TileLayer(
                 urlTemplate:
                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                // Replace this with your app's actual Android application ID.
                 userAgentPackageName: 'com.ridesync.app',
               ),
-
               if (_routePoints.length >= 2)
                 PolylineLayer(
                   polylines: [
@@ -122,33 +120,32 @@ class _OdometerScreenState extends State<OdometerScreen> {
                     ),
                   ],
                 ),
-
               if (position != null)
                 MarkerLayer(
                   markers: [
                     Marker(
                       point: currentPoint,
-                      width: 42,
-                      height: 42,
+                      width: 36,
+                      height: 36,
                       child: Container(
                         decoration: BoxDecoration(
                           color: orange,
                           shape: BoxShape.circle,
                           border: Border.all(
                             color: Colors.white,
-                            width: 3,
+                            width: 2,
                           ),
                           boxShadow: [
                             BoxShadow(
                               color: Colors.black.withValues(alpha: 0.3),
-                              blurRadius: 12,
+                              blurRadius: 8,
                             ),
                           ],
                         ),
                         child: const Icon(
                           Icons.navigation_rounded,
                           color: Colors.black,
-                          size: 22,
+                          size: 19,
                         ),
                       ),
                     ),
@@ -158,48 +155,49 @@ class _OdometerScreenState extends State<OdometerScreen> {
           ),
         ),
 
-        // Map information badge.
+        // Compact GPS status and recenter button.
         Positioned(
-          top: 10,
-          left: 10,
-          right: 10,
+          top: 7,
+          left: 7,
+          right: 7,
           child: Row(
             children: [
-              Expanded(
+              Flexible(
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 9,
+                    horizontal: 8,
+                    vertical: 6,
                   ),
                   decoration: BoxDecoration(
                     color: const Color(0xEE101112),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.08),
+                      color: Colors.white.withValues(alpha: 0.07),
                     ),
                   ),
                   child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
                         position == null
                             ? Icons.location_searching_rounded
                             : Icons.my_location_rounded,
                         color: position == null ? muted : green,
-                        size: 17,
+                        size: 13,
                       ),
-                      const SizedBox(width: 7),
-                      Expanded(
+                      const SizedBox(width: 5),
+                      Flexible(
                         child: Text(
                           position == null
-                              ? 'WAITING FOR LOCATION'
-                              : 'GPS LOCATION LOCKED',
+                              ? 'WAITING FOR GPS'
+                              : 'GPS LOCKED',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 0.8,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.4,
                           ),
                         ),
                       ),
@@ -207,12 +205,12 @@ class _OdometerScreenState extends State<OdometerScreen> {
                   ),
                 ),
               ),
-              const SizedBox(width: 7),
+              const SizedBox(width: 5),
               Material(
                 color: const Color(0xEE101112),
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(8),
                 child: InkWell(
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(8),
                   onTap: () {
                     if (position != null) {
                       _moveMapTo(position);
@@ -221,12 +219,12 @@ class _OdometerScreenState extends State<OdometerScreen> {
                     }
                   },
                   child: const SizedBox(
-                    width: 39,
-                    height: 39,
+                    width: 31,
+                    height: 31,
                     child: Icon(
                       Icons.my_location_rounded,
                       color: orange,
-                      size: 19,
+                      size: 16,
                     ),
                   ),
                 ),
@@ -235,20 +233,20 @@ class _OdometerScreenState extends State<OdometerScreen> {
           ),
         ),
 
-        // Trip distance badge.
+        // Smaller trip-distance card.
         Positioned(
-          left: 10,
-          bottom: 10,
+          left: 7,
+          bottom: 7,
           child: Container(
             padding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 9,
+              horizontal: 9,
+              vertical: 6,
             ),
             decoration: BoxDecoration(
               color: const Color(0xEE101112),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: orange.withValues(alpha: 0.35),
+                color: orange.withValues(alpha: 0.30),
               ),
             ),
             child: Column(
@@ -259,18 +257,19 @@ class _OdometerScreenState extends State<OdometerScreen> {
                   'TRIP DISTANCE',
                   style: TextStyle(
                     color: muted,
-                    fontSize: 8,
+                    fontSize: 7,
                     fontWeight: FontWeight.bold,
-                    letterSpacing: 1.2,
+                    letterSpacing: 0.8,
                   ),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 2),
                 Text(
                   '$_travelDistanceKm km',
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 19,
-                    fontWeight: FontWeight.w900,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    height: 1.0,
                   ),
                 ),
               ],
@@ -278,65 +277,76 @@ class _OdometerScreenState extends State<OdometerScreen> {
           ),
         ),
 
+        // GPS error panel remains available when location fails.
         if (_mapMessage != null)
-  Positioned(
-    left: 10,
-    right: 10,
-    bottom: 80,
-    child: Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xF01B1D1F),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.08),
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            _mapMessage!,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11,
+          Positioned(
+            left: 7,
+            right: 7,
+            bottom: 65,
+            child: Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                color: const Color(0xF01B1D1F),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.08),
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _mapMessage!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 5,
+                    children: [
+                      TextButton.icon(
+                        onPressed:
+                            _mapLoading ? null : _startMapLocation,
+                        icon: const Icon(
+                          Icons.refresh_rounded,
+                          size: 14,
+                        ),
+                        label: const Text('RETRY'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: orange,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          await Geolocator.openLocationSettings();
+                        },
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        child: const Text(
+                          'LOCATION SETTINGS',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 9,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 8,
-            children: [
-              TextButton.icon(
-                onPressed: _mapLoading
-                    ? null
-                    : _startMapLocation,
-                icon: const Icon(Icons.refresh_rounded, size: 16),
-                label: const Text('RETRY'),
-                style: TextButton.styleFrom(
-                  foregroundColor: orange,
-                ),
-              ),
-              TextButton(
-                onPressed: () async {
-                  await Geolocator.openLocationSettings();
-                },
-                child: const Text(
-                  'LOCATION SETTINGS',
-                  style: TextStyle(color: Colors.white70, fontSize: 10),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    ),
-  ),
       ],
     ),
   );
 }
+
 
   Future<void> _enterOdometerMode() async {
     await SystemChrome.setPreferredOrientations([
