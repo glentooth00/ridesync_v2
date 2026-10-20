@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 
 class OdometerScreen extends StatefulWidget {
   const OdometerScreen({
@@ -35,9 +36,17 @@ class _OdometerScreenState extends State<OdometerScreen> {
   static const Color green = Color(0xFF65E6A5);
 
   bool _rideActive = false;
+  bool _startingRide = false;
+  bool _gpsReady = false;
+
+  String _gpsStatus = 'GPS STANDBY';
+
+  double _speedKmh = 0;
   DateTime? _rideStartedAt;
   Duration _elapsed = Duration.zero;
+
   Timer? _rideTimer;
+  StreamSubscription<Position>? _positionSubscription;
 
   @override
   void initState() {
@@ -59,32 +68,200 @@ class _OdometerScreenState extends State<OdometerScreen> {
     ]);
   }
 
-  void _startRide() {
-    _rideTimer?.cancel();
+  Future<void> _startRide() async {
+    if (_rideActive || _startingRide) return;
 
     setState(() {
-      _rideActive = true;
-      _rideStartedAt = DateTime.now();
-      _elapsed = Duration.zero;
+      _startingRide = true;
+      _gpsStatus = 'CHECKING GPS';
     });
 
-    _rideTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted || _rideStartedAt == null) return;
+    try {
+      var permission = await Geolocator.checkPermission();
+
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (!mounted) return;
+
+      if (permission == LocationPermission.denied) {
+        await _showMessage(
+          'Location permission is required to display live speed.',
+        );
+        return;
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        await _showMessage(
+          'Location access is blocked. Open app settings and allow '
+          'location permission to use the speedometer.',
+          settings: true,
+        );
+        return;
+      }
+
+      final serviceEnabled =
+          await Geolocator.isLocationServiceEnabled();
+
+      if (!mounted) return;
+
+      if (!serviceEnabled) {
+        await _showMessage(
+          'Your phone GPS is turned off. Enable Location Services '
+          'before starting your ride.',
+          locationSettings: true,
+        );
+        return;
+      }
+
+      await _positionSubscription?.cancel();
+
+      final locationSettings = AndroidSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 1,
+        intervalDuration: const Duration(seconds: 1),
+      );
+
+      _positionSubscription = Geolocator.getPositionStream(
+        locationSettings: locationSettings,
+      ).listen(
+        (position) {
+          if (!mounted || !_rideActive) return;
+
+          final speed = position.speed.isFinite
+              ? (position.speed * 3.6).clamp(0.0, 999.0)
+              : 0.0;
+
+          setState(() {
+            _speedKmh = speed;
+            _gpsReady = true;
+            _gpsStatus = 'GPS CONNECTED';
+          });
+        },
+        onError: (Object error) {
+          if (!mounted) return;
+
+          setState(() {
+            _gpsReady = false;
+            _gpsStatus = 'GPS ERROR';
+            _speedKmh = 0;
+          });
+
+          _showMessage(
+            'GPS updates are unavailable. Check your location settings '
+            'and try again.',
+          );
+        },
+      );
 
       setState(() {
-        _elapsed = DateTime.now().difference(_rideStartedAt!);
+        _rideActive = true;
+        _gpsReady = false;
+        _speedKmh = 0;
+        _gpsStatus = 'WAITING FOR GPS';
+        _rideStartedAt = DateTime.now();
+        _elapsed = Duration.zero;
       });
-    });
+
+      _rideTimer?.cancel();
+      _rideTimer = Timer.periodic(
+        const Duration(seconds: 1),
+        (_) {
+          if (!mounted || _rideStartedAt == null) return;
+
+          setState(() {
+            _elapsed = DateTime.now().difference(_rideStartedAt!);
+          });
+        },
+      );
+    } catch (error) {
+      if (mounted) {
+        await _showMessage(
+          'Unable to start GPS tracking. Please try again.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _startingRide = false);
+      }
+    }
   }
 
-  void _endRide() {
+  Future<void> _showMessage(
+    String message, {
+    bool settings = false,
+    bool locationSettings = false,
+  }) async {
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: panel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        title: const Text(
+          'GPS REQUIRED',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        content: Text(
+          message,
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text(
+              'CLOSE',
+              style: TextStyle(color: muted),
+            ),
+          ),
+          if (settings || locationSettings)
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(dialogContext);
+
+                if (settings) {
+                  await Geolocator.openAppSettings();
+                } else {
+                  await Geolocator.openLocationSettings();
+                }
+              },
+              child: const Text(
+                'OPEN SETTINGS',
+                style: TextStyle(
+                  color: orange,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _endRide() async {
     _rideTimer?.cancel();
+    await _positionSubscription?.cancel();
+    _positionSubscription = null;
+
+    if (!mounted) return;
 
     setState(() {
       _rideActive = false;
+      _gpsReady = false;
+      _gpsStatus = 'GPS STANDBY';
+      _speedKmh = 0;
+
       if (_rideStartedAt != null) {
         _elapsed = DateTime.now().difference(_rideStartedAt!);
       }
+
       _rideStartedAt = null;
     });
 
@@ -94,6 +271,7 @@ class _OdometerScreenState extends State<OdometerScreen> {
   @override
   void dispose() {
     _rideTimer?.cancel();
+    _positionSubscription?.cancel();
     _restorePortrait();
     super.dispose();
   }
@@ -110,9 +288,7 @@ class _OdometerScreenState extends State<OdometerScreen> {
   Widget build(BuildContext context) {
     return PopScope(
       onPopInvokedWithResult: (didPop, result) {
-        if (didPop) {
-          _restorePortrait();
-        }
+        if (didPop) _restorePortrait();
       },
       child: Scaffold(
         backgroundColor: background,
@@ -127,7 +303,7 @@ class _OdometerScreenState extends State<OdometerScreen> {
                   ),
                   Container(
                     width: 1,
-                    margin: const EdgeInsets.symmetric(vertical: 18),
+                    margin: const EdgeInsets.symmetric(vertical: 20),
                     color: Colors.white.withValues(alpha: 0.08),
                   ),
                   Expanded(
@@ -145,7 +321,7 @@ class _OdometerScreenState extends State<OdometerScreen> {
 
   Widget _buildSpeedPanel(double availableHeight) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 10, 14, 10),
+      padding: const EdgeInsets.fromLTRB(20, 12, 18, 12),
       child: Column(
         children: [
           Row(
@@ -160,39 +336,25 @@ class _OdometerScreenState extends State<OdometerScreen> {
                 'RIDE',
                 style: TextStyle(
                   color: Colors.white,
+                  fontSize: 17,
                   fontWeight: FontWeight.w900,
                   letterSpacing: 2,
-                  fontSize: 17,
                 ),
               ),
               const Text(
                 'SYNC',
                 style: TextStyle(
                   color: orange,
+                  fontSize: 17,
                   fontWeight: FontWeight.w900,
                   letterSpacing: 2,
-                  fontSize: 17,
                 ),
               ),
               const Spacer(),
-              Icon(
-                Icons.gps_fixed_rounded,
-                color: _rideActive ? green : muted,
-                size: 16,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                'GPS ${_rideActive ? 'READY' : 'STANDBY'}',
-                style: TextStyle(
-                  color: _rideActive ? green : muted,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                ),
-              ),
+              _gpsBadge(),
             ],
           ),
-          const SizedBox(height: 3),
+          const SizedBox(height: 7),
           const Align(
             alignment: Alignment.centerLeft,
             child: Text(
@@ -222,19 +384,15 @@ class _OdometerScreenState extends State<OdometerScreen> {
                         CustomPaint(
                           size: Size.square(dialSize),
                           painter: _SpeedometerPainter(
-                            speed: widget.speedKmh,
+                            speed: _speedKmh,
                           ),
                         ),
                         Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            SizedBox(height: dialSize * 0.10),
+                            SizedBox(height: dialSize * 0.09),
                             Text(
-                              widget.speedKmh
-                                  .clamp(0, 999)
-                                  .round()
-                                  .toString()
-                                  .padLeft(2, '0'),
+                              _speedKmh.round().toString().padLeft(2, '0'),
                               style: TextStyle(
                                 color: Colors.white,
                                 fontSize: dialSize * 0.19,
@@ -253,15 +411,18 @@ class _OdometerScreenState extends State<OdometerScreen> {
                                 letterSpacing: 4,
                               ),
                             ),
-                            SizedBox(height: dialSize * 0.045),
+                            SizedBox(height: dialSize * 0.04),
                             Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 12,
-                                vertical: 5,
+                                vertical: 6,
                               ),
                               decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.05),
-                                borderRadius: BorderRadius.circular(5),
+                                color: Colors.white.withValues(alpha: 0.055),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.06),
+                                ),
                               ),
                               child: Text(
                                 'ODO  ${widget.odometerKm.toStringAsFixed(1)} KM',
@@ -287,9 +448,44 @@ class _OdometerScreenState extends State<OdometerScreen> {
     );
   }
 
+  Widget _gpsBadge() {
+    final color = _gpsReady
+        ? green
+        : (_startingRide || _rideActive ? orange : muted);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            _gpsReady ? Icons.gps_fixed_rounded : Icons.gps_not_fixed_rounded,
+            color: color,
+            size: 14,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            _gpsStatus,
+            style: TextStyle(
+              color: color,
+              fontSize: 9,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.8,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDetailsPanel() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 10, 18, 10),
+      padding: const EdgeInsets.fromLTRB(16, 12, 20, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -301,7 +497,7 @@ class _OdometerScreenState extends State<OdometerScreen> {
                   style: TextStyle(
                     color: muted,
                     fontSize: 10,
-                    letterSpacing: 2,
+                    letterSpacing: 1.8,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -318,32 +514,51 @@ class _OdometerScreenState extends State<OdometerScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 3),
           Expanded(
             flex: 5,
             child: Container(
               width: double.infinity,
               decoration: BoxDecoration(
-                color: panel,
-                borderRadius: BorderRadius.circular(14),
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF242628),
+                    Color(0xFF171819),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(15),
                 border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.07),
+                  color: Colors.white.withValues(alpha: 0.075),
                 ),
               ),
               child: Stack(
                 clipBehavior: Clip.hardEdge,
                 children: [
                   Positioned(
-                    right: -15,
-                    top: -20,
+                    right: -14,
+                    top: -18,
                     child: Icon(
                       Icons.two_wheeler_rounded,
                       size: 150,
-                      color: Colors.white.withValues(alpha: 0.035),
+                      color: Colors.white.withValues(alpha: 0.045),
+                    ),
+                  ),
+                  Positioned(
+                    right: 15,
+                    bottom: 10,
+                    child: Text(
+                      '${widget.engineCc} CC',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.035),
+                        fontSize: 32,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ),
                   Padding(
-                    padding: const EdgeInsets.all(15),
+                    padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -351,9 +566,12 @@ class _OdometerScreenState extends State<OdometerScreen> {
                         Container(
                           width: 38,
                           height: 3,
-                          color: orange,
+                          decoration: BoxDecoration(
+                            color: orange,
+                            borderRadius: BorderRadius.circular(3),
+                          ),
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 12),
                         Text(
                           widget.motorcycleName.toUpperCase(),
                           maxLines: 2,
@@ -393,7 +611,7 @@ class _OdometerScreenState extends State<OdometerScreen> {
               ),
               decoration: BoxDecoration(
                 color: panel,
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(15),
                 border: Border.all(
                   color: Colors.white.withValues(alpha: 0.07),
                 ),
@@ -424,30 +642,38 @@ class _OdometerScreenState extends State<OdometerScreen> {
           const SizedBox(height: 10),
           SizedBox(
             width: double.infinity,
-            height: 43,
+            height: 45,
             child: ElevatedButton.icon(
-              onPressed: _rideActive ? _endRide : _startRide,
+              onPressed: _startingRide
+                  ? null
+                  : (_rideActive ? _endRide : _startRide),
               style: ElevatedButton.styleFrom(
-                backgroundColor: _rideActive ? const Color(0xFF292B2D) : orange,
+                backgroundColor:
+                    _rideActive ? const Color(0xFF292B2D) : orange,
+                disabledBackgroundColor: const Color(0xFF3A302B),
                 foregroundColor: _rideActive ? Colors.white : Colors.black,
                 elevation: 0,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(9),
+                  borderRadius: BorderRadius.circular(10),
                   side: _rideActive
                       ? BorderSide(
-                          color: Colors.white.withValues(alpha: 0.1),
+                          color: Colors.white.withValues(alpha: 0.12),
                         )
                       : BorderSide.none,
                 ),
               ),
               icon: Icon(
-                _rideActive
-                    ? Icons.stop_circle_outlined
-                    : Icons.play_arrow_rounded,
+                _startingRide
+                    ? Icons.hourglass_top_rounded
+                    : (_rideActive
+                        ? Icons.stop_circle_outlined
+                        : Icons.play_arrow_rounded),
                 size: 20,
               ),
               label: Text(
-                _rideActive ? 'END RIDE' : 'START RIDE',
+                _startingRide
+                    ? 'CONNECTING GPS...'
+                    : (_rideActive ? 'END RIDE' : 'START RIDE'),
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w900,
@@ -469,8 +695,16 @@ class _OdometerScreenState extends State<OdometerScreen> {
   }) {
     return Row(
       children: [
-        Icon(icon, color: orange, size: 17),
-        const SizedBox(width: 9),
+        Container(
+          width: 31,
+          height: 31,
+          decoration: BoxDecoration(
+            color: orange.withValues(alpha: 0.09),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: orange, size: 17),
+        ),
+        const SizedBox(width: 10),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -536,10 +770,7 @@ class _SpeedometerPainter extends CustomPainter {
     const sweepAngle = math.pi * 1.5;
     const maximumSpeed = 160.0;
 
-    final arcRect = Rect.fromCircle(
-      center: center,
-      radius: radius,
-    );
+    final arcRect = Rect.fromCircle(center: center, radius: radius);
 
     canvas.drawArc(
       arcRect,
@@ -569,14 +800,14 @@ class _SpeedometerPainter extends CustomPainter {
       );
     }
 
-    // Eighty intervals create fine ticks and larger marks every 20 km/h.
     for (int i = 0; i <= 80; i++) {
       final angle = startAngle + sweepAngle * i / 80;
       final major = i % 10 == 0;
       final medium = i % 5 == 0;
 
       final outerRadius = radius * 0.88;
-      final innerRadius = radius * (major ? 0.70 : medium ? 0.75 : 0.80);
+      final innerRadius =
+          radius * (major ? 0.70 : medium ? 0.75 : 0.80);
 
       final start = Offset(
         center.dx + outerRadius * math.cos(angle),
@@ -588,15 +819,16 @@ class _SpeedometerPainter extends CustomPainter {
         center.dy + innerRadius * math.sin(angle),
       );
 
-      final tickPaint = Paint()
-        ..color = major ? Colors.white : muted.withValues(alpha: 0.65)
-        ..strokeWidth = major ? 2.2 : medium ? 1.4 : 0.8
-        ..strokeCap = StrokeCap.round;
-
-      canvas.drawLine(start, end, tickPaint);
+      canvas.drawLine(
+        start,
+        end,
+        Paint()
+          ..color = major ? Colors.white : muted.withValues(alpha: 0.65)
+          ..strokeWidth = major ? 2.2 : medium ? 1.4 : 0.8
+          ..strokeCap = StrokeCap.round,
+      );
     }
 
-    // Numeric markings.
     for (int value = 0; value <= 160; value += 20) {
       final angle = startAngle + sweepAngle * value / maximumSpeed;
       final labelRadius = radius * 0.59;
@@ -606,7 +838,7 @@ class _SpeedometerPainter extends CustomPainter {
         center.dy + labelRadius * math.sin(angle),
       );
 
-      final textPainter = TextPainter(
+      final painter = TextPainter(
         text: TextSpan(
           text: '$value',
           style: TextStyle(
@@ -618,18 +850,16 @@ class _SpeedometerPainter extends CustomPainter {
         textDirection: TextDirection.ltr,
       )..layout();
 
-      textPainter.paint(
+      painter.paint(
         canvas,
         Offset(
-          position.dx - textPainter.width / 2,
-          position.dy - textPainter.height / 2,
+          position.dx - painter.width / 2,
+          position.dy - painter.height / 2,
         ),
       );
     }
 
-    // Needle.
-    final needleAngle =
-        startAngle + sweepAngle * progress;
+    final needleAngle = startAngle + sweepAngle * progress;
     final needleLength = radius * 0.62;
 
     final needleTip = Offset(
