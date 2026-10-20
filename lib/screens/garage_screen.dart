@@ -130,6 +130,15 @@ class GarageScreen extends StatelessWidget {
                             ),
                             const SizedBox(height: 4),
                             Text(
+                              'ID: ${motorcycle.id}',
+                              style: const TextStyle(
+                                color: AppTheme.muted,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
                               '${motorcycle.year} • '
                               '${motorcycle.engineCc.isEmpty ? 'CC not set' : '${motorcycle.engineCc} cc'}',
                               style: const TextStyle(

@@ -88,6 +88,16 @@ class _RideSyncAppState extends State<RideSyncApp> {
     await AppStorage.saveRides(_rides);
   }
 
+  Future<void> _refreshRides() async {
+  final rides = await AppStorage.loadRides();
+
+  if (!mounted) return;
+
+  setState(() {
+    _rides = rides;
+  });
+}
+
   Future<void> _clearLocalData() async {
     await AppStorage.clearAll();
 
@@ -122,6 +132,7 @@ class _RideSyncAppState extends State<RideSyncApp> {
                   onSelectMotorcycle: _selectMotorcycle,
                   onAddRide: _addRide,
                   onClearLocalData: _clearLocalData,
+                  onRefreshRides: _refreshRides,
                 ),
     );
   }

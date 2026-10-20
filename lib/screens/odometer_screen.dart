@@ -2,6 +2,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:async';
 import 'dart:math' as math;
+import '../models/ride.dart';
+import '../services/app_storage.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +13,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 class OdometerScreen extends StatefulWidget {
   const OdometerScreen({
     super.key,
+    this.motorcycleId = 0,
     this.motorcycleName = 'My Motorcycle',
     this.year = '2024',
     this.engineCc = 150,
@@ -19,6 +22,7 @@ class OdometerScreen extends StatefulWidget {
     this.onEndRide,
   });
 
+  final int motorcycleId;
   final String motorcycleName;
   final String year;
   final int engineCc;
@@ -716,39 +720,92 @@ Future<void> _startMapLocation() async {
     );
   }
 
-  Future<void> _endRide() async {
-    _rideTimer?.cancel();
-    _rideTimer = null;
 
-    await _positionSubscription?.cancel();
-    _positionSubscription = null;
+Future<void> _endRide() async {
+  if (!_rideActive) return;
 
-    await _mapSubscription?.cancel();
-    _mapSubscription = null;
+  final endedAt = DateTime.now();
+  final startedAt = _rideStartedAt;
 
-    if (!mounted) return;
+  final elapsed = startedAt != null
+      ? endedAt.difference(startedAt)
+      : _elapsed;
 
-    setState(() {
-      _rideActive = false;
-      _gpsReady = false;
-      _gpsStatus = 'GPS STANDBY';
-      _speedKmh = 0;
+  final distanceKm = _travelDistanceMeters / 1000;
 
-      if (_rideStartedAt != null) {
-        _elapsed = DateTime.now().difference(_rideStartedAt!);
-      }
+  _rideTimer?.cancel();
+  _rideTimer = null;
 
-      _rideStartedAt = null;
-      _lastPosition = null;
-    });
+  await _positionSubscription?.cancel();
+  _positionSubscription = null;
 
-    widget.onEndRide?.call();
+  await _mapSubscription?.cancel();
+  _mapSubscription = null;
+
+  // Save this ride against the motorcycle that was used.
+  bool saved = false;
+
+  if (startedAt != null && widget.motorcycleId > 0) {
+    try {
+      final ride = RideRecord(
+        id: DateTime.now().microsecondsSinceEpoch,
+        motorcycleId: widget.motorcycleId,
+        date: startedAt,
+        startTime: startedAt,
+        endTime: endedAt,
+        distanceKm: distanceKm,
+        durationMinutes: elapsed.inMinutes,
+      );
+
+      final rides = await AppStorage.loadRides();
+      rides.add(ride);
+      await AppStorage.saveRides(rides);
+
+      saved = true;
+    } catch (error) {
+      debugPrint('Failed to save ride history: $error');
+    }
+  }
+
+  if (!mounted) return;
+
+  setState(() {
+    _rideActive = false;
+    _gpsReady = false;
+    _gpsStatus = 'GPS STANDBY';
+    _speedKmh = 0;
+    _elapsed = elapsed;
+    _rideStartedAt = null;
+    _lastPosition = null;
+  });
+
+  if (saved) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Ride saved to your ride history.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  } else {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          widget.motorcycleId <= 0
+              ? 'Ride ended, but no motorcycle ID was provided.'
+              : 'Ride ended, but the history could not be saved.',
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  widget.onEndRide?.call();
 
   if (mounted && _selectedPane == 1) {
     await _startMapLocation();
   }
+}
 
-  }
 
   @override
   void dispose() {
