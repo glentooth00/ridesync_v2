@@ -1,4 +1,5 @@
-
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -52,11 +53,286 @@ class _OdometerScreenState extends State<OdometerScreen> {
   Timer? _rideTimer;
   StreamSubscription<Position>? _positionSubscription;
 
+  // Right-side panel: 0 = Motorcycle, 1 = Map.
+  int _selectedPane = 0;
+
+  final MapController _mapController = MapController();
+
+  bool _mapReady = false;
+  bool _mapLoading = false;
+  String? _mapMessage;
+
+  Position? _currentPosition;
+  StreamSubscription<Position>? _mapSubscription;
+
+  final List<LatLng> _routePoints = [];
+
   @override
   void initState() {
     super.initState();
     _enterOdometerMode();
   }
+
+  Widget _buildMapPanel() {
+  final position = _currentPosition;
+
+  final currentPoint = position == null
+      ? const LatLng(12.8797, 121.7740)
+      : LatLng(position.latitude, position.longitude);
+
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(14),
+    child: Stack(
+      children: [
+        Positioned.fill(
+          child: FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: currentPoint,
+              initialZoom: position == null ? 5 : 16,
+              onMapReady: () {
+                _mapReady = true;
+
+                final latestPosition = _currentPosition;
+
+                if (latestPosition != null) {
+                  _moveMapTo(latestPosition);
+                }
+              },
+            ),
+            children: [
+              TileLayer(
+                urlTemplate:
+                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                // Replace this with your app's actual Android application ID.
+                userAgentPackageName: 'com.ridesync.app',
+              ),
+
+              if (_routePoints.length >= 2)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: List<LatLng>.unmodifiable(_routePoints),
+                      strokeWidth: 4,
+                      color: orange,
+                    ),
+                  ],
+                ),
+
+              if (position != null)
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: currentPoint,
+                      width: 42,
+                      height: 42,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: orange,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white,
+                            width: 3,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 12,
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.navigation_rounded,
+                          color: Colors.black,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+
+        // Map information badge.
+        Positioned(
+          top: 10,
+          left: 10,
+          right: 10,
+          child: Row(
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 9,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xEE101112),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.08),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        position == null
+                            ? Icons.location_searching_rounded
+                            : Icons.my_location_rounded,
+                        color: position == null ? muted : green,
+                        size: 17,
+                      ),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          position == null
+                              ? 'WAITING FOR LOCATION'
+                              : 'GPS LOCATION LOCKED',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 7),
+              Material(
+                color: const Color(0xEE101112),
+                borderRadius: BorderRadius.circular(10),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () {
+                    if (position != null) {
+                      _moveMapTo(position);
+                    } else {
+                      _startMapLocation();
+                    }
+                  },
+                  child: const SizedBox(
+                    width: 39,
+                    height: 39,
+                    child: Icon(
+                      Icons.my_location_rounded,
+                      color: orange,
+                      size: 19,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Trip distance badge.
+        Positioned(
+          left: 10,
+          bottom: 10,
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 9,
+            ),
+            decoration: BoxDecoration(
+              color: const Color(0xEE101112),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: orange.withValues(alpha: 0.35),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'TRIP DISTANCE',
+                  style: TextStyle(
+                    color: muted,
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '$_travelDistanceKm km',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        if (_mapMessage != null)
+  Positioned(
+    left: 10,
+    right: 10,
+    bottom: 80,
+    child: Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xF01B1D1F),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.08),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _mapMessage!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            children: [
+              TextButton.icon(
+                onPressed: _mapLoading
+                    ? null
+                    : _startMapLocation,
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('RETRY'),
+                style: TextButton.styleFrom(
+                  foregroundColor: orange,
+                ),
+              ),
+              TextButton(
+                onPressed: () async {
+                  await Geolocator.openLocationSettings();
+                },
+                child: const Text(
+                  'LOCATION SETTINGS',
+                  style: TextStyle(color: Colors.white70, fontSize: 10),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  ),
+      ],
+    ),
+  );
+}
 
   Future<void> _enterOdometerMode() async {
     await SystemChrome.setPreferredOrientations([
@@ -125,10 +401,15 @@ class _OdometerScreenState extends State<OdometerScreen> {
       }
 
       await _positionSubscription?.cancel();
+      await _mapSubscription?.cancel();
 
-      // Reset trip measurements for this ride.
+      _positionSubscription = null;
+      _mapSubscription = null;
+
+      // Start a fresh trip and route.
       _lastPosition = null;
       _travelDistanceMeters = 0;
+      _routePoints.clear();
 
       final locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
@@ -189,38 +470,193 @@ class _OdometerScreenState extends State<OdometerScreen> {
     }
   }
 
-  void _handlePosition(Position position) {
-    if (!mounted || !_rideActive) return;
+void _handlePosition(Position position) {
+  if (!mounted || !_rideActive) return;
 
-    final rawSpeed = position.speed;
-    final speed = rawSpeed.isFinite
-        ? (rawSpeed * 3.6).clamp(0.0, 999.0).toDouble()
-        : 0.0;
+  final rawSpeed = position.speed;
 
-    final previous = _lastPosition;
+  final speed = rawSpeed.isFinite
+      ? (rawSpeed * 3.6).clamp(0.0, 999.0).toDouble()
+      : 0.0;
 
-    if (previous != null) {
-      final distance = Geolocator.distanceBetween(
-        previous.latitude,
-        previous.longitude,
-        position.latitude,
-        position.longitude,
-      );
+  final point = LatLng(
+    position.latitude,
+    position.longitude,
+  );
 
-      // Ignore tiny GPS drift and implausibly large single-point jumps.
-      // Larger jumps are skipped rather than inflating the trip distance.
-      if (distance.isFinite && distance >= 1.5 && distance <= 100) {
-        _travelDistanceMeters += distance;
-      }
+  final previous = _lastPosition;
+
+  if (previous != null) {
+    final distance = Geolocator.distanceBetween(
+      previous.latitude,
+      previous.longitude,
+      position.latitude,
+      position.longitude,
+    );
+
+    // Filter out GPS drift and implausible location jumps.
+    if (distance.isFinite && distance >= 1.5 && distance <= 100) {
+      _travelDistanceMeters += distance;
+      _routePoints.add(point);
+    }
+  } else {
+    _routePoints.add(point);
+  }
+
+  _lastPosition = position;
+  _currentPosition = position;
+
+  setState(() {
+    _speedKmh = speed;
+    _gpsReady = true;
+    _gpsStatus = 'GPS CONNECTED';
+  });
+
+  if (_mapReady && _selectedPane == 1) {
+    _moveMapTo(position);
+  }
+}
+
+Future<void> _selectPane(int index) async {
+  if (!mounted || _selectedPane == index) return;
+
+  setState(() {
+    _selectedPane = index;
+  });
+
+  if (index == 1) {
+    await _startMapLocation();
+  } else if (!_rideActive) {
+    await _mapSubscription?.cancel();
+    _mapSubscription = null;
+  }
+}
+
+Future<void> _startMapLocation() async {
+  if (_mapLoading) return;
+
+  if (_rideActive) {
+    final position = _currentPosition;
+
+    if (_mapReady && position != null) {
+      _moveMapTo(position);
+    }
+    return;
+  }
+
+  setState(() {
+    _mapLoading = true;
+    _mapMessage = 'Checking location services...';
+  });
+
+  try {
+    // Check app permission first.
+    var permission = await Geolocator.checkPermission();
+
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
     }
 
-    _lastPosition = position;
+    if (!mounted) return;
+
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      setState(() {
+        _mapMessage = permission == LocationPermission.deniedForever
+            ? 'Location permission is blocked. Open app settings and allow location.'
+            : 'Location permission is required to show your position.';
+      });
+      return;
+    }
+
+    // Recheck Android's location service.
+    var serviceEnabled =
+        await Geolocator.isLocationServiceEnabled();
+
+    if (!mounted) return;
+
+    if (!serviceEnabled) {
+      setState(() {
+        _mapMessage =
+            'Android reports that Location Services are off. '
+            'Check your phone settings, then tap Retry.';
+      });
+      return;
+    }
+
+    // Get a fresh GPS fix instead of relying only on a cached location.
+    setState(() {
+      _mapMessage = 'Getting your current location...';
+    });
+
+    final position = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 15),
+      ),
+    );
+
+    if (!mounted) return;
+
+    _handleMapPosition(position);
+
+    // Start ongoing map updates.
+    await _mapSubscription?.cancel();
+
+    _mapSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 5,
+      ),
+    ).listen(
+      _handleMapPosition,
+      onError: (Object error) {
+        if (!mounted) return;
+
+        setState(() {
+          _mapMessage = 'GPS updates failed. Tap Retry to reconnect.';
+        });
+      },
+    );
+  } catch (error) {
+    if (!mounted) return;
 
     setState(() {
-      _speedKmh = speed;
-      _gpsReady = true;
-      _gpsStatus = 'GPS CONNECTED';
+      _mapMessage =
+          'Could not get a GPS fix. Move outdoors and try again.';
     });
+  } finally {
+    if (mounted) {
+      setState(() {
+        _mapLoading = false;
+      });
+    }
+  }
+}
+
+  void _handleMapPosition(Position position) {
+    if (!mounted) return;
+
+    _currentPosition = position;
+
+    setState(() {
+      _mapMessage = null;
+    });
+
+    if (_mapReady && _selectedPane == 1) {
+      _moveMapTo(position);
+    }
+  }
+
+  void _moveMapTo(Position position) {
+    try {
+      _mapController.move(
+        LatLng(position.latitude, position.longitude),
+        16,
+      );
+    } catch (_) {
+      // The map controller might not be attached yet.
+    }
   }
 
   Future<void> _showMessage(
@@ -287,6 +723,9 @@ class _OdometerScreenState extends State<OdometerScreen> {
     await _positionSubscription?.cancel();
     _positionSubscription = null;
 
+    await _mapSubscription?.cancel();
+    _mapSubscription = null;
+
     if (!mounted) return;
 
     setState(() {
@@ -304,14 +743,19 @@ class _OdometerScreenState extends State<OdometerScreen> {
     });
 
     widget.onEndRide?.call();
+
+  if (mounted && _selectedPane == 1) {
+    await _startMapLocation();
+  }
+
   }
 
   @override
   void dispose() {
     _rideTimer?.cancel();
     _positionSubscription?.cancel();
+    _mapSubscription?.cancel();
 
-    // Restore system settings when this screen is removed.
     unawaited(_restoreScreenMode());
 
     super.dispose();
@@ -667,43 +1111,166 @@ class _OdometerScreenState extends State<OdometerScreen> {
     );
   }
 
-  Widget _buildDetailsPanel({
-    required bool compactWidth,
-    required bool compactHeight,
-  }) {
-    final horizontalPadding = compactWidth ? 8.0 : 16.0;
-    final verticalPadding = compactHeight ? 4.0 : 12.0;
+Widget _buildDetailsPanel({
+  required bool compactWidth,
+  required bool compactHeight,
+}) {
+  final horizontalPadding = compactWidth ? 8.0 : 16.0;
+  final verticalPadding = compactHeight ? 4.0 : 12.0;
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        horizontalPadding,
-        verticalPadding,
-        compactWidth ? 8 : 20,
-        verticalPadding,
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // Short displays get a scrollable details panel instead of
-          // forcing every card and button into an undersized space.
-          if (constraints.maxHeight < 330) {
-            return SingleChildScrollView(
-              child: _buildDetailsContent(
-                compactWidth: compactWidth,
-                compactHeight: true,
-                scrollable: true,
+  return Padding(
+    padding: EdgeInsets.fromLTRB(
+      horizontalPadding,
+      verticalPadding,
+      compactWidth ? 8 : 20,
+      verticalPadding,
+    ),
+    child: Column(
+      children: [
+        // Header.
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'RIDE CONTROL',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: muted,
+                  fontSize: compactWidth ? 9 : 11,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: compactWidth ? 1 : 2,
+                ),
               ),
-            );
-          }
+            ),
+            SizedBox(
+              width: compactWidth ? 27 : 36,
+              height: compactWidth ? 27 : 36,
+              child: IconButton(
+                tooltip: 'Close odometer',
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: Icon(
+                  Icons.close_rounded,
+                  color: muted,
+                  size: compactWidth ? 17 : 21,
+                ),
+              ),
+            ),
+          ],
+        ),
 
-          return _buildDetailsContent(
-            compactWidth: compactWidth,
-            compactHeight: compactHeight,
-            scrollable: false,
-          );
-        },
+        SizedBox(height: compactHeight ? 4 : 9),
+
+        // Two tabs.
+        Row(
+          children: [
+            Expanded(
+              child: _paneTab(
+                label: 'MOTORCYCLE',
+                icon: Icons.two_wheeler_rounded,
+                index: 0,
+                compact: compactWidth,
+              ),
+            ),
+            const SizedBox(width: 7),
+            Expanded(
+              child: _paneTab(
+                label: 'MAP',
+                icon: Icons.map_outlined,
+                index: 1,
+                compact: compactWidth,
+              ),
+            ),
+          ],
+        ),
+
+        SizedBox(height: compactHeight ? 5 : 10),
+
+        // Keep both tabs mounted so the map doesn't need to be rebuilt
+        // whenever the user switches back to the motorcycle tab.
+        Expanded(
+          child: IndexedStack(
+            index: _selectedPane,
+            children: [
+              SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: _buildDetailsContent(
+                  compactWidth: compactWidth,
+                  compactHeight: true,
+                  scrollable: true,
+                ),
+              ),
+
+              // Build the map only when the Map tab is selected.
+              _selectedPane == 1
+                  ? _buildMapPanel()
+                  : const SizedBox.expand(),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _paneTab({
+  required String label,
+  required IconData icon,
+  required int index,
+  required bool compact,
+}) {
+  final selected = _selectedPane == index;
+
+  return Material(
+    color: selected ? orange : panel,
+    borderRadius: BorderRadius.circular(9),
+    child: InkWell(
+      borderRadius: BorderRadius.circular(9),
+      onTap: () => _selectPane(index),
+      child: Container(
+        height: compact ? 34 : 41,
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 4 : 8,
+        ),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(
+            color: selected
+                ? orange
+                : Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: compact ? 14 : 17,
+              color: selected ? Colors.black : muted,
+            ),
+            SizedBox(width: compact ? 4 : 7),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? Colors.black : Colors.white70,
+                  fontSize: compact ? 8 : 10,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: compact ? 0.3 : 0.8,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
-    );
-  }
+    ),
+  );
+}
+
 
   Widget _buildDetailsContent({
     required bool compactWidth,
