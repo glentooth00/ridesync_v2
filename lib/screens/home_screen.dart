@@ -13,6 +13,7 @@ class HomeScreen extends StatelessWidget {
     required this.selectedMotorcycle,
     required this.onGoToGarage,
     required this.onAddRide,
+    required this.onRefreshRides, // Add this
   });
 
   final List<Motorcycle> motorcycles;
@@ -20,6 +21,8 @@ class HomeScreen extends StatelessWidget {
   final Motorcycle? selectedMotorcycle;
   final VoidCallback onGoToGarage;
   final Future<void> Function(RideRecord) onAddRide;
+  final Future<void> Function() onRefreshRides;
+
 
   double get totalDistance =>
       rides.fold(0.0, (sum, ride) => sum + ride.distanceKm);
@@ -42,14 +45,14 @@ class HomeScreen extends StatelessWidget {
                   fontWeight: FontWeight.w900,
                 ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 7),
 
           Text(
             'Every mile\nhas a story.',
             style: Theme.of(context).textTheme.headlineLarge?.copyWith(
                   fontWeight: FontWeight.w900,
                   height: 1.04,
-                  letterSpacing: -1.1,
+                  letterSpacing: -1,
                 ),
           ),
           const SizedBox(height: 22),
@@ -210,30 +213,35 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  void _openOdometer(BuildContext context) {
-    final bike = selectedMotorcycle;
+Future<void> _openOdometer(BuildContext context) async {
+  final bike = selectedMotorcycle;
 
-    if (bike == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Add a motorcycle to your garage first.'),
-        ),
-      );
-      onGoToGarage();
-      return;
-    }
-
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => OdometerScreen(
-          motorcycleName: bike.displayName,
-          year: '${bike.year}',
-          engineCc: int.tryParse(bike.engineCc) ?? 0,
-          odometerKm: bike.odometerKm.toDouble(),
-        ),
+  if (bike == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Add a motorcycle to your garage first.'),
       ),
     );
+    onGoToGarage();
+    return;
   }
+
+  await Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      builder: (_) => OdometerScreen(
+        motorcycleId: bike.id,
+        motorcycleName: bike.displayName,
+        year: '${bike.year}',
+        engineCc: int.tryParse(bike.engineCc) ?? 0,
+        odometerKm: bike.odometerKm,
+      ),
+    ),
+  );
+
+  if (!context.mounted) return;
+
+  await onRefreshRides();
+}
 
   Future<void> _showLogRide(BuildContext context) async {
     final bike = selectedMotorcycle;
@@ -476,6 +484,18 @@ class _MotorcycleHero extends StatelessWidget {
               letterSpacing: -0.5,
             ),
           ),
+          if (bike != null) ...[
+            const SizedBox(height: 5),
+            Text(
+              'MOTORCYCLE ID: ${bike.id}',
+              style: const TextStyle(
+                color: AppTheme.orange,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1,
+              ),
+            ),
+          ],
           const SizedBox(height: 7),
 
           Text(
