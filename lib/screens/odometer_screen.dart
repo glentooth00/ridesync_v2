@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 class OdometerScreen extends StatefulWidget {
   const OdometerScreen({
@@ -42,6 +43,9 @@ class _OdometerScreenState extends State<OdometerScreen> {
   String _gpsStatus = 'GPS STANDBY';
 
   double _speedKmh = 0;
+  double _travelDistanceMeters = 0;
+
+  Position? _lastPosition;
   DateTime? _rideStartedAt;
   Duration _elapsed = Duration.zero;
 
@@ -51,17 +55,21 @@ class _OdometerScreenState extends State<OdometerScreen> {
   @override
   void initState() {
     super.initState();
-    _enterLandscape();
+    _enterOdometerMode();
   }
 
-  Future<void> _enterLandscape() async {
+  Future<void> _enterOdometerMode() async {
     await SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
+
+    await WakelockPlus.enable();
   }
 
-  Future<void> _restorePortrait() async {
+  Future<void> _restoreScreenMode() async {
+    await WakelockPlus.disable();
+
     await SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
@@ -87,7 +95,8 @@ class _OdometerScreenState extends State<OdometerScreen> {
 
       if (permission == LocationPermission.denied) {
         await _showMessage(
-          'Location permission is required to display live speed.',
+          'Location permission is required to display live speed '
+          'and calculate travel distance.',
         );
         return;
       }
@@ -95,7 +104,7 @@ class _OdometerScreenState extends State<OdometerScreen> {
       if (permission == LocationPermission.deniedForever) {
         await _showMessage(
           'Location access is blocked. Open app settings and allow '
-          'location permission to use the speedometer.',
+          'location permission to use ride tracking.',
           settings: true,
         );
         return;
@@ -117,6 +126,10 @@ class _OdometerScreenState extends State<OdometerScreen> {
 
       await _positionSubscription?.cancel();
 
+      // Reset trip measurements for this ride.
+      _lastPosition = null;
+      _travelDistanceMeters = 0;
+
       final locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 1,
@@ -126,19 +139,7 @@ class _OdometerScreenState extends State<OdometerScreen> {
       _positionSubscription = Geolocator.getPositionStream(
         locationSettings: locationSettings,
       ).listen(
-        (position) {
-          if (!mounted || !_rideActive) return;
-
-          final speed = position.speed.isFinite
-              ? (position.speed * 3.6).clamp(0.0, 999.0)
-              : 0.0;
-
-          setState(() {
-            _speedKmh = speed;
-            _gpsReady = true;
-            _gpsStatus = 'GPS CONNECTED';
-          });
-        },
+        _handlePosition,
         onError: (Object error) {
           if (!mounted) return;
 
@@ -186,6 +187,40 @@ class _OdometerScreenState extends State<OdometerScreen> {
         setState(() => _startingRide = false);
       }
     }
+  }
+
+  void _handlePosition(Position position) {
+    if (!mounted || !_rideActive) return;
+
+    final rawSpeed = position.speed;
+    final speed = rawSpeed.isFinite
+        ? (rawSpeed * 3.6).clamp(0.0, 999.0).toDouble()
+        : 0.0;
+
+    final previous = _lastPosition;
+
+    if (previous != null) {
+      final distance = Geolocator.distanceBetween(
+        previous.latitude,
+        previous.longitude,
+        position.latitude,
+        position.longitude,
+      );
+
+      // Ignore tiny GPS drift and implausibly large single-point jumps.
+      // Larger jumps are skipped rather than inflating the trip distance.
+      if (distance.isFinite && distance >= 1.5 && distance <= 100) {
+        _travelDistanceMeters += distance;
+      }
+    }
+
+    _lastPosition = position;
+
+    setState(() {
+      _speedKmh = speed;
+      _gpsReady = true;
+      _gpsStatus = 'GPS CONNECTED';
+    });
   }
 
   Future<void> _showMessage(
@@ -247,6 +282,8 @@ class _OdometerScreenState extends State<OdometerScreen> {
 
   Future<void> _endRide() async {
     _rideTimer?.cancel();
+    _rideTimer = null;
+
     await _positionSubscription?.cancel();
     _positionSubscription = null;
 
@@ -263,6 +300,7 @@ class _OdometerScreenState extends State<OdometerScreen> {
       }
 
       _rideStartedAt = null;
+      _lastPosition = null;
     });
 
     widget.onEndRide?.call();
@@ -272,7 +310,10 @@ class _OdometerScreenState extends State<OdometerScreen> {
   void dispose() {
     _rideTimer?.cancel();
     _positionSubscription?.cancel();
-    _restorePortrait();
+
+    // Restore system settings when this screen is removed.
+    unawaited(_restoreScreenMode());
+
     super.dispose();
   }
 
@@ -284,31 +325,53 @@ class _OdometerScreenState extends State<OdometerScreen> {
     return '$hours:$minutes:$seconds';
   }
 
+  String get _travelDistanceKm =>
+      (_travelDistanceMeters / 1000).toStringAsFixed(2);
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
       onPopInvokedWithResult: (didPop, result) {
-        if (didPop) _restorePortrait();
+        if (didPop) {
+          unawaited(_restoreScreenMode());
+        }
       },
       child: Scaffold(
         backgroundColor: background,
         body: SafeArea(
           child: LayoutBuilder(
             builder: (context, constraints) {
+              final width = constraints.maxWidth;
+              final height = constraints.maxHeight;
+
+              // Retain the split landscape layout on phones and tablets.
+              // Use a compact layout when the available width is narrow.
+              final compactWidth = width < 720;
+              final compactHeight = height < 390;
+
               return Row(
                 children: [
                   Expanded(
-                    flex: 6,
-                    child: _buildSpeedPanel(constraints.maxHeight),
+                    flex: compactWidth ? 5 : 6,
+                    child: _buildSpeedPanel(
+                      height: height,
+                      compactWidth: compactWidth,
+                      compactHeight: compactHeight,
+                    ),
                   ),
                   Container(
                     width: 1,
-                    margin: const EdgeInsets.symmetric(vertical: 20),
+                    margin: EdgeInsets.symmetric(
+                      vertical: compactHeight ? 8 : 20,
+                    ),
                     color: Colors.white.withValues(alpha: 0.08),
                   ),
                   Expanded(
-                    flex: 4,
-                    child: _buildDetailsPanel(),
+                    flex: compactWidth ? 5 : 4,
+                    child: _buildDetailsPanel(
+                      compactWidth: compactWidth,
+                      compactHeight: compactHeight,
+                    ),
                   ),
                 ],
               );
@@ -319,126 +382,168 @@ class _OdometerScreenState extends State<OdometerScreen> {
     );
   }
 
-  Widget _buildSpeedPanel(double availableHeight) {
+  Widget _buildSpeedPanel({
+    required double height,
+    required bool compactWidth,
+    required bool compactHeight,
+  }) {
+    final horizontalPadding = compactWidth ? 10.0 : 20.0;
+    final verticalPadding = compactHeight ? 5.0 : 12.0;
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 12, 18, 12),
+      padding: EdgeInsets.fromLTRB(
+        horizontalPadding,
+        verticalPadding,
+        compactWidth ? 8 : 18,
+        verticalPadding,
+      ),
       child: Column(
         children: [
           Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.two_wheeler_rounded,
                 color: orange,
-                size: 25,
+                size: compactWidth ? 19 : 25,
               ),
-              const SizedBox(width: 9),
-              const Text(
+              SizedBox(width: compactWidth ? 4 : 9),
+              Text(
                 'RIDE',
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 17,
+                  fontSize: compactWidth ? 13 : 17,
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 2,
+                  letterSpacing: compactWidth ? 1 : 2,
                 ),
               ),
-              const Text(
+              Text(
                 'SYNC',
                 style: TextStyle(
                   color: orange,
-                  fontSize: 17,
+                  fontSize: compactWidth ? 13 : 17,
                   fontWeight: FontWeight.w900,
-                  letterSpacing: 2,
+                  letterSpacing: compactWidth ? 1 : 2,
                 ),
               ),
               const Spacer(),
-              _gpsBadge(),
+              Flexible(child: _gpsBadge(compact: compactWidth)),
             ],
           ),
-          const SizedBox(height: 7),
-          const Align(
+          SizedBox(height: compactHeight ? 2 : 7),
+          Align(
             alignment: Alignment.centerLeft,
             child: Text(
               'LIVE SPEEDOMETER',
               style: TextStyle(
                 color: muted,
-                fontSize: 9,
-                letterSpacing: 2.5,
+                fontSize: compactWidth ? 7 : 9,
+                letterSpacing: compactWidth ? 1.3 : 2.5,
                 fontWeight: FontWeight.w700,
               ),
             ),
           ),
+          const SizedBox(height: 2),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final dialSize = math.min(
-                  constraints.maxWidth,
-                  constraints.maxHeight,
+                // Reserve room for the trip-distance panel below the dial.
+                final distanceHeight = compactHeight ? 43.0 : 53.0;
+                final gap = compactHeight ? 3.0 : 7.0;
+
+                final dialSize = math.max(
+                  0.0,
+                  math.min(
+                    constraints.maxWidth,
+                    constraints.maxHeight - distanceHeight - gap,
+                  ),
                 );
 
-                return Center(
-                  child: SizedBox.square(
-                    dimension: dialSize,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        CustomPaint(
-                          size: Size.square(dialSize),
-                          painter: _SpeedometerPainter(
-                            speed: _speedKmh,
+                return Column(
+                  children: [
+                    Expanded(
+                      child: Center(
+                        child: SizedBox.square(
+                          dimension: dialSize,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              CustomPaint(
+                                size: Size.square(dialSize),
+                                painter: _SpeedometerPainter(
+                                  speed: _speedKmh,
+                                ),
+                              ),
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(height: dialSize * 0.09),
+                                  Text(
+                                    _speedKmh
+                                        .round()
+                                        .toString()
+                                        .padLeft(2, '0'),
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: dialSize * 0.19,
+                                      fontWeight: FontWeight.w900,
+                                      height: 1,
+                                      letterSpacing: -2,
+                                    ),
+                                  ),
+                                  SizedBox(height: compactHeight ? 2 : 5),
+                                  Text(
+                                    'KM/H',
+                                    style: TextStyle(
+                                      color: orange,
+                                      fontSize: compactWidth ? 9 : 12,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: compactWidth ? 2 : 4,
+                                    ),
+                                  ),
+                                  SizedBox(height: dialSize * 0.025),
+                                  Container(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: compactWidth ? 6 : 12,
+                                      vertical: compactHeight ? 3 : 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.055,
+                                      ),
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.06,
+                                        ),
+                                      ),
+                                    ),
+                                    child: FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      child: Text(
+                                        'ODO  ${widget.odometerKm.toStringAsFixed(1)} KM',
+                                        style: TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: compactWidth ? 8 : 10,
+                                          fontWeight: FontWeight.bold,
+                                          letterSpacing: 1,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(height: dialSize * 0.09),
-                            Text(
-                              _speedKmh.round().toString().padLeft(2, '0'),
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: dialSize * 0.19,
-                                fontWeight: FontWeight.w900,
-                                height: 1,
-                                letterSpacing: -2,
-                              ),
-                            ),
-                            const SizedBox(height: 5),
-                            const Text(
-                              'KM/H',
-                              style: TextStyle(
-                                color: orange,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 4,
-                              ),
-                            ),
-                            SizedBox(height: dialSize * 0.04),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.055),
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.06),
-                                ),
-                              ),
-                              child: Text(
-                                'ODO  ${widget.odometerKm.toStringAsFixed(1)} KM',
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 1,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
+                    SizedBox(height: gap),
+                    _buildDistanceCounter(
+                      compactWidth: compactWidth,
+                      compactHeight: compactHeight,
+                      height: distanceHeight,
+                    ),
+                  ],
                 );
               },
             ),
@@ -448,13 +553,88 @@ class _OdometerScreenState extends State<OdometerScreen> {
     );
   }
 
-  Widget _gpsBadge() {
+  Widget _buildDistanceCounter({
+    required bool compactWidth,
+    required bool compactHeight,
+    required double height,
+  }) {
+    return Container(
+      height: height,
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(
+        horizontal: compactWidth ? 9 : 15,
+        vertical: compactHeight ? 4 : 7,
+      ),
+      decoration: BoxDecoration(
+        color: panel,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: orange.withValues(alpha: 0.22),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.route_rounded,
+            color: orange,
+            size: compactWidth ? 17 : 21,
+          ),
+          SizedBox(width: compactWidth ? 6 : 10),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'TRIP DISTANCE',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: muted,
+                    fontSize: compactWidth ? 7 : 9,
+                    letterSpacing: compactWidth ? 1 : 1.6,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  '$_travelDistanceKm km',
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: compactWidth ? 15 : 19,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (!compactWidth)
+            Text(
+              _rideActive ? 'RECORDING' : 'READY',
+              style: TextStyle(
+                color: _rideActive ? green : muted,
+                fontSize: 8,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _gpsBadge({required bool compact}) {
     final color = _gpsReady
         ? green
         : (_startingRide || _rideActive ? orange : muted);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 5 : 10,
+        vertical: compact ? 4 : 7,
+      ),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.09),
         borderRadius: BorderRadius.circular(7),
@@ -466,16 +646,20 @@ class _OdometerScreenState extends State<OdometerScreen> {
           Icon(
             _gpsReady ? Icons.gps_fixed_rounded : Icons.gps_not_fixed_rounded,
             color: color,
-            size: 14,
+            size: compact ? 11 : 14,
           ),
-          const SizedBox(width: 6),
-          Text(
-            _gpsStatus,
-            style: TextStyle(
-              color: color,
-              fontSize: 9,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.8,
+          SizedBox(width: compact ? 3 : 6),
+          Flexible(
+            child: Text(
+              _gpsStatus,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color,
+                fontSize: compact ? 7 : 9,
+                fontWeight: FontWeight.w900,
+                letterSpacing: compact ? 0.2 : 0.8,
+              ),
             ),
           ),
         ],
@@ -483,207 +667,275 @@ class _OdometerScreenState extends State<OdometerScreen> {
     );
   }
 
-  Widget _buildDetailsPanel() {
+  Widget _buildDetailsPanel({
+    required bool compactWidth,
+    required bool compactHeight,
+  }) {
+    final horizontalPadding = compactWidth ? 8.0 : 16.0;
+    final verticalPadding = compactHeight ? 4.0 : 12.0;
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 20, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      padding: EdgeInsets.fromLTRB(
+        horizontalPadding,
+        verticalPadding,
+        compactWidth ? 8 : 20,
+        verticalPadding,
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Short displays get a scrollable details panel instead of
+          // forcing every card and button into an undersized space.
+          if (constraints.maxHeight < 330) {
+            return SingleChildScrollView(
+              child: _buildDetailsContent(
+                compactWidth: compactWidth,
+                compactHeight: true,
+                scrollable: true,
+              ),
+            );
+          }
+
+          return _buildDetailsContent(
+            compactWidth: compactWidth,
+            compactHeight: compactHeight,
+            scrollable: false,
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildDetailsContent({
+    required bool compactWidth,
+    required bool compactHeight,
+    required bool scrollable,
+  }) {
+    final gap = compactHeight ? 4.0 : 10.0;
+
+    final motorcycleCard = Container(
+      width: double.infinity,
+      constraints: BoxConstraints(
+        minHeight: compactHeight ? 85 : 105,
+      ),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF242628),
+            Color(0xFF171819),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.075),
+        ),
+      ),
+      child: Stack(
+        clipBehavior: Clip.hardEdge,
         children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'ACTIVE MOTORCYCLE',
+          Positioned(
+            right: -14,
+            top: -18,
+            child: Icon(
+              Icons.two_wheeler_rounded,
+              size: compactWidth ? 90 : 150,
+              color: Colors.white.withValues(alpha: 0.045),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.all(compactHeight ? 9 : 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 38,
+                  height: 3,
+                  decoration: BoxDecoration(
+                    color: orange,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                SizedBox(height: compactHeight ? 5 : 12),
+                Text(
+                  widget.motorcycleName.toUpperCase(),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: muted,
-                    fontSize: 10,
-                    letterSpacing: 1.8,
+                    color: Colors.white,
+                    fontSize: compactWidth ? 15 : 21,
+                    fontWeight: FontWeight.w900,
+                    height: 1.1,
+                  ),
+                ),
+                SizedBox(height: compactHeight ? 4 : 8),
+                Text(
+                  '${widget.engineCc} CC  /  ${widget.year}',
+                  style: TextStyle(
+                    color: orange,
+                    fontSize: compactWidth ? 9 : 11,
                     fontWeight: FontWeight.bold,
+                    letterSpacing: compactWidth ? 0.8 : 1.5,
                   ),
                 ),
-              ),
-              IconButton(
-                tooltip: 'Close odometer',
-                onPressed: () => Navigator.of(context).maybePop(),
-                icon: const Icon(
-                  Icons.close_rounded,
-                  color: muted,
-                  size: 21,
-                ),
-                visualDensity: VisualDensity.compact,
-              ),
-            ],
-          ),
-          const SizedBox(height: 3),
-          Expanded(
-            flex: 5,
-            child: Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFF242628),
-                    Color(0xFF171819),
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(15),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.075),
-                ),
-              ),
-              child: Stack(
-                clipBehavior: Clip.hardEdge,
-                children: [
-                  Positioned(
-                    right: -14,
-                    top: -18,
-                    child: Icon(
-                      Icons.two_wheeler_rounded,
-                      size: 150,
-                      color: Colors.white.withValues(alpha: 0.045),
-                    ),
-                  ),
-                  Positioned(
-                    right: 15,
-                    bottom: 10,
-                    child: Text(
-                      '${widget.engineCc} CC',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.035),
-                        fontSize: 32,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          width: 38,
-                          height: 3,
-                          decoration: BoxDecoration(
-                            color: orange,
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          widget.motorcycleName.toUpperCase(),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 21,
-                            fontWeight: FontWeight.w900,
-                            height: 1.1,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '${widget.engineCc} CC  /  ${widget.year}',
-                          style: const TextStyle(
-                            color: orange,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Expanded(
-            flex: 4,
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 8,
-              ),
-              decoration: BoxDecoration(
-                color: panel,
-                borderRadius: BorderRadius.circular(15),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.07),
-                ),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _detailRow(
-                    Icons.speed_rounded,
-                    'TOTAL ODOMETER',
-                    '${widget.odometerKm.toStringAsFixed(1)} km',
-                  ),
-                  _detailRow(
-                    Icons.timer_outlined,
-                    'RIDE TIME',
-                    _formatDuration(_elapsed),
-                  ),
-                  _detailRow(
-                    Icons.route_rounded,
-                    'RIDE STATUS',
-                    _rideActive ? 'IN PROGRESS' : 'NOT STARTED',
-                    valueColor: _rideActive ? green : muted,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            height: 45,
-            child: ElevatedButton.icon(
-              onPressed: _startingRide
-                  ? null
-                  : (_rideActive ? _endRide : _startRide),
-              style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    _rideActive ? const Color(0xFF292B2D) : orange,
-                disabledBackgroundColor: const Color(0xFF3A302B),
-                foregroundColor: _rideActive ? Colors.white : Colors.black,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  side: _rideActive
-                      ? BorderSide(
-                          color: Colors.white.withValues(alpha: 0.12),
-                        )
-                      : BorderSide.none,
-                ),
-              ),
-              icon: Icon(
-                _startingRide
-                    ? Icons.hourglass_top_rounded
-                    : (_rideActive
-                        ? Icons.stop_circle_outlined
-                        : Icons.play_arrow_rounded),
-                size: 20,
-              ),
-              label: Text(
-                _startingRide
-                    ? 'CONNECTING GPS...'
-                    : (_rideActive ? 'END RIDE' : 'START RIDE'),
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 1.5,
-                ),
-              ),
+              ],
             ),
           ),
         ],
       ),
+    );
+
+    final statsCard = Container(
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(
+        horizontal: compactWidth ? 8 : 14,
+        vertical: compactHeight ? 4 : 8,
+      ),
+      decoration: BoxDecoration(
+        color: panel,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.07),
+        ),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _detailRow(
+            Icons.speed_rounded,
+            'TOTAL ODOMETER',
+            '${widget.odometerKm.toStringAsFixed(1)} km',
+            compact: compactWidth,
+          ),
+          _detailRow(
+            Icons.timer_outlined,
+            'RIDE TIME',
+            _formatDuration(_elapsed),
+            compact: compactWidth,
+          ),
+          _detailRow(
+            Icons.route_rounded,
+            'RIDE STATUS',
+            _rideActive ? 'IN PROGRESS' : 'NOT STARTED',
+            valueColor: _rideActive ? green : muted,
+            compact: compactWidth,
+          ),
+        ],
+      ),
+    );
+
+    final button = SizedBox(
+      width: double.infinity,
+      height: compactHeight ? 37 : 45,
+      child: ElevatedButton.icon(
+        onPressed: _startingRide
+            ? null
+            : (_rideActive ? _endRide : _startRide),
+        style: ElevatedButton.styleFrom(
+          backgroundColor:
+              _rideActive ? const Color(0xFF292B2D) : orange,
+          disabledBackgroundColor: const Color(0xFF3A302B),
+          foregroundColor: _rideActive ? Colors.white : Colors.black,
+          elevation: 0,
+          padding: EdgeInsets.symmetric(
+            horizontal: compactWidth ? 5 : 12,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: _rideActive
+                ? BorderSide(
+                    color: Colors.white.withValues(alpha: 0.12),
+                  )
+                : BorderSide.none,
+          ),
+        ),
+        icon: Icon(
+          _startingRide
+              ? Icons.hourglass_top_rounded
+              : (_rideActive
+                  ? Icons.stop_circle_outlined
+                  : Icons.play_arrow_rounded),
+          size: compactWidth ? 16 : 20,
+        ),
+        label: Flexible(
+          child: Text(
+            _startingRide
+                ? 'CONNECTING GPS...'
+                : (_rideActive ? 'END RIDE' : 'START RIDE'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: compactWidth ? 9 : 12,
+              fontWeight: FontWeight.w900,
+              letterSpacing: compactWidth ? 0.6 : 1.5,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (scrollable) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _detailsHeader(compactWidth),
+          SizedBox(height: gap),
+          motorcycleCard,
+          SizedBox(height: gap),
+          statsCard,
+          SizedBox(height: gap),
+          button,
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _detailsHeader(compactWidth),
+        SizedBox(height: compactHeight ? 1 : 3),
+        Expanded(flex: 5, child: motorcycleCard),
+        SizedBox(height: gap),
+        Expanded(flex: 4, child: statsCard),
+        SizedBox(height: gap),
+        button,
+      ],
+    );
+  }
+
+  Widget _detailsHeader(bool compactWidth) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            'ACTIVE MOTORCYCLE',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: muted,
+              fontSize: compactWidth ? 8 : 10,
+              letterSpacing: compactWidth ? 1 : 1.8,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: compactWidth ? 27 : 36,
+          height: compactWidth ? 27 : 36,
+          child: IconButton(
+            tooltip: 'Close odometer',
+            padding: EdgeInsets.zero,
+            onPressed: () => Navigator.of(context).maybePop(),
+            icon: Icon(
+              Icons.close_rounded,
+              color: muted,
+              size: compactWidth ? 17 : 21,
+            ),
+            visualDensity: VisualDensity.compact,
+          ),
+        ),
+      ],
     );
   }
 
@@ -692,48 +944,60 @@ class _OdometerScreenState extends State<OdometerScreen> {
     String label,
     String value, {
     Color valueColor = Colors.white,
+    bool compact = false,
   }) {
-    return Row(
-      children: [
-        Container(
-          width: 31,
-          height: 31,
-          decoration: BoxDecoration(
-            color: orange.withValues(alpha: 0.09),
-            borderRadius: BorderRadius.circular(8),
+    final iconSize = compact ? 25.0 : 31.0;
+
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: compact ? 2 : 3),
+      child: Row(
+        children: [
+          Container(
+            width: iconSize,
+            height: iconSize,
+            decoration: BoxDecoration(
+              color: orange.withValues(alpha: 0.09),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              icon,
+              color: orange,
+              size: compact ? 14 : 17,
+            ),
           ),
-          child: Icon(icon, color: orange, size: 17),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  color: muted,
-                  fontSize: 8,
-                  letterSpacing: 1,
-                  fontWeight: FontWeight.bold,
+          SizedBox(width: compact ? 6 : 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: muted,
+                    fontSize: compact ? 7 : 8,
+                    letterSpacing: compact ? 0.4 : 1,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: valueColor,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
+                SizedBox(height: compact ? 1 : 3),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: valueColor,
+                    fontSize: compact ? 10 : 12,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -748,6 +1012,8 @@ class _SpeedometerPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+
     final center = Offset(size.width / 2, size.height / 2);
     final radius = size.width * 0.43;
 
@@ -763,7 +1029,7 @@ class _SpeedometerPainter extends CustomPainter {
       Paint()
         ..color = Colors.white.withValues(alpha: 0.08)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
+        ..strokeWidth = math.max(1, size.width * 0.004),
     );
 
     const startAngle = math.pi * 0.75;
@@ -872,7 +1138,7 @@ class _SpeedometerPainter extends CustomPainter {
       needleTip,
       Paint()
         ..color = orange
-        ..strokeWidth = 3
+        ..strokeWidth = math.max(2, size.width * 0.008)
         ..strokeCap = StrokeCap.round,
     );
 
