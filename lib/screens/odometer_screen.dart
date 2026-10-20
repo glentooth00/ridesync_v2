@@ -893,176 +893,208 @@ Future<void> _endRide() async {
     );
   }
 
-  Widget _buildSpeedPanel({
-    required double height,
-    required bool compactWidth,
-    required bool compactHeight,
-  }) {
-    final horizontalPadding = compactWidth ? 10.0 : 20.0;
-    final verticalPadding = compactHeight ? 5.0 : 12.0;
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        horizontalPadding,
-        verticalPadding,
-        compactWidth ? 8 : 18,
-        verticalPadding,
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.two_wheeler_rounded,
-                color: orange,
-                size: compactWidth ? 19 : 25,
-              ),
-              SizedBox(width: compactWidth ? 4 : 9),
-              Text(
-                'RIDE',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: compactWidth ? 13 : 17,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: compactWidth ? 1 : 2,
-                ),
-              ),
-              Text(
-                'SYNC',
-                style: TextStyle(
-                  color: orange,
-                  fontSize: compactWidth ? 13 : 17,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: compactWidth ? 1 : 2,
-                ),
-              ),
-              const Spacer(),
-              Flexible(child: _gpsBadge(compact: compactWidth)),
-            ],
-          ),
-          SizedBox(height: compactHeight ? 2 : 7),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'LIVE SPEEDOMETER',
+Widget _buildSpeedPanel({
+  required double height,
+  required bool compactWidth,
+  required bool compactHeight,
+}) {
+  final horizontalPadding = compactWidth ? 10.0 : 20.0;
+  final verticalPadding = compactHeight ? 5.0 : 12.0;
+
+  return Padding(
+    padding: EdgeInsets.fromLTRB(
+      horizontalPadding,
+      verticalPadding,
+      compactWidth ? 8 : 18,
+      verticalPadding,
+    ),
+    child: Column(
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.two_wheeler_rounded,
+              color: orange,
+              size: compactWidth ? 19 : 25,
+            ),
+            SizedBox(width: compactWidth ? 4 : 9),
+            Text(
+              'RIDE',
               style: TextStyle(
-                color: muted,
-                fontSize: compactWidth ? 7 : 9,
-                letterSpacing: compactWidth ? 1.3 : 2.5,
-                fontWeight: FontWeight.w700,
+                color: Colors.white,
+                fontSize: compactWidth ? 13 : 17,
+                fontWeight: FontWeight.w900,
+                letterSpacing: compactWidth ? 1 : 2,
               ),
             ),
-          ),
-          const SizedBox(height: 2),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // Reserve room for the trip-distance panel below the dial.
-                final distanceHeight = compactHeight ? 43.0 : 53.0;
-                final gap = compactHeight ? 3.0 : 7.0;
+            Text(
+              'SYNC',
+              style: TextStyle(
+                color: orange,
+                fontSize: compactWidth ? 13 : 17,
+                fontWeight: FontWeight.w900,
+                letterSpacing: compactWidth ? 1 : 2,
+              ),
+            ),
+            const Spacer(),
+            Flexible(child: _gpsBadge(compact: compactWidth)),
+          ],
+        ),
 
-                final dialSize = math.max(
-                  0.0,
-                  math.min(
-                    constraints.maxWidth,
-                    constraints.maxHeight - distanceHeight - gap,
+        SizedBox(height: compactHeight ? 2 : 7),
+
+        // Trip distance now sits at the top-left of the odometer.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: compactWidth ? 8 : 11,
+              vertical: compactHeight ? 3 : 5,
+            ),
+            decoration: BoxDecoration(
+              color: panel,
+              borderRadius: BorderRadius.circular(7),
+              border: Border.all(
+                color: orange.withValues(alpha: 0.25),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.route_rounded,
+                  color: orange,
+                  size: compactWidth ? 12 : 15,
+                ),
+                SizedBox(width: compactWidth ? 4 : 6),
+                Text(
+                  'TRIP',
+                  style: TextStyle(
+                    color: muted,
+                    fontSize: compactWidth ? 7 : 8,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
                   ),
-                );
+                ),
+                SizedBox(width: compactWidth ? 5 : 8),
+                Text(
+                  '$_travelDistanceKm km',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: compactWidth ? 11 : 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
 
-                return Column(
-                  children: [
-                    Expanded(
-                      child: Center(
-                        child: SizedBox.square(
-                          dimension: dialSize,
-                          child: Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              CustomPaint(
-                                size: Size.square(dialSize),
-                                painter: _SpeedometerPainter(
-                                  speed: _speedKmh,
-                                ),
-                              ),
-                              Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  SizedBox(height: dialSize * 0.09),
-                                  Text(
-                                    _speedKmh
-                                        .round()
-                                        .toString()
-                                        .padLeft(2, '0'),
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: dialSize * 0.19,
-                                      fontWeight: FontWeight.w900,
-                                      height: 1,
-                                      letterSpacing: -2,
-                                    ),
-                                  ),
-                                  SizedBox(height: compactHeight ? 2 : 5),
-                                  Text(
-                                    'KM/H',
-                                    style: TextStyle(
-                                      color: orange,
-                                      fontSize: compactWidth ? 9 : 12,
-                                      fontWeight: FontWeight.w900,
-                                      letterSpacing: compactWidth ? 2 : 4,
-                                    ),
-                                  ),
-                                  SizedBox(height: dialSize * 0.025),
-                                  Container(
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: compactWidth ? 6 : 12,
-                                      vertical: compactHeight ? 3 : 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(
-                                        alpha: 0.055,
-                                      ),
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(
-                                        color: Colors.white.withValues(
-                                          alpha: 0.06,
-                                        ),
-                                      ),
-                                    ),
-                                    child: FittedBox(
-                                      fit: BoxFit.scaleDown,
-                                      child: Text(
-                                        'ODO  ${widget.odometerKm.toStringAsFixed(1)} KM',
-                                        style: TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: compactWidth ? 8 : 10,
-                                          fontWeight: FontWeight.bold,
-                                          letterSpacing: 1,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
+        SizedBox(height: compactHeight ? 1 : 3),
+
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // Use the available space for a larger speedometer.
+              final dialSize = math.max(
+                0.0,
+                math.min(
+                  constraints.maxWidth,
+                  constraints.maxHeight,
+                ),
+              );
+
+              return Center(
+                child: SizedBox.square(
+                  dimension: dialSize,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      CustomPaint(
+                        size: Size.square(dialSize),
+                        painter: _SpeedometerPainter(
+                          speed: _speedKmh,
                         ),
                       ),
-                    ),
-                    SizedBox(height: gap),
-                    _buildDistanceCounter(
-                      compactWidth: compactWidth,
-                      compactHeight: compactHeight,
-                      height: distanceHeight,
-                    ),
-                  ],
-                );
-              },
-            ),
+
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(height: dialSize * 0.09),
+
+                          Text(
+                            _speedKmh
+                                .round()
+                                .toString()
+                                .padLeft(2, '0'),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: dialSize * 0.19,
+                              fontWeight: FontWeight.w900,
+                              height: 1,
+                              letterSpacing: -2,
+                            ),
+                          ),
+
+                          SizedBox(height: compactHeight ? 2 : 5),
+
+                          Text(
+                            'KM/H',
+                            style: TextStyle(
+                              color: orange,
+                              fontSize: compactWidth ? 9 : 12,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: compactWidth ? 2 : 4,
+                            ),
+                          ),
+
+                          SizedBox(height: dialSize * 0.025),
+
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: compactWidth ? 6 : 12,
+                              vertical: compactHeight ? 3 : 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(
+                                alpha: 0.055,
+                              ),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: Colors.white.withValues(
+                                  alpha: 0.06,
+                                ),
+                              ),
+                            ),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                'ODO  ${widget.odometerKm.toStringAsFixed(1)} KM',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: compactWidth ? 8 : 10,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
-        ],
-      ),
-    );
-  }
+        ),
+      ],
+    ),
+  );
+}
+
+
 
   Widget _buildDistanceCounter({
     required bool compactWidth,
