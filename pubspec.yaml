@@ -11,11 +11,20 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   shared_preferences: ^2.3.2
+  geolocator: ^14.1.2
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.4
+
 
 flutter:
   uses-material-design: true
+
+flutter_launcher_icons:
+  android: true
+  image_path: "assets/icons/ridesync_icon.png"
+  adaptive_icon_background: "#151617"
+  adaptive_icon_foreground: "assets/icons/ridesync_icon.png"
